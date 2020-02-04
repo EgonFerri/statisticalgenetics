@@ -1,0 +1,242 @@
+---
+title: 'Bioinformatics and Statistical Genetic'
+subtitle: 'Association analysis'
+output:
+  pdf_document:
+    fig_height: 4
+    number_sections: yes
+    toc: yes
+  html_document:
+    toc: yes
+author: Leonardo Ortoleva & Egon Ferri
+---
+
+
+
+```{r}
+knitr::opts_chunk$set(echo = F)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+require(genetics, quietly = T)
+require(viridis, quietly = T)
+require(knitr, quietly = T)
+require(purrr, quietly = T)
+require(HardyWeinberg, quietly = T)
+require(data.table, quietly = T)
+require(fitdistrplus, quietly = T)
+require(e1071, quietly = T)
+require(LDheatmap, quietly = T)
+require(tidyverse, quietly = T)
+require(kableExtra, quietly = T)
+require(haplo.stats, quietly = T)
+require(MASS, quietly = T)
+
+```
+
+# Load data into the R environment.
+
+```{r}
+data <- fread('rs394221.dat', header = FALSE)
+colnames(data)<-c('Genotype', 'Disease')
+data <- data.frame(data)
+```
+
+```{r}
+kable(t(data[1:8,1:2]), format = "latex",  booktabs = T, caption = 'Data') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position') 
+
+```
+# What is the sample size? What is the number of cases and the number of controls? Construct the contingency table of genotype by case/control status.
+
+```{r}
+controldat<-data[1][data[2]=='control']
+casedat<-data[1][data[2]=='case']
+```
+
+```{r}
+print(paste('sample size: ', dim(data)[1]))
+print(paste('number of cases: ', length(casedat)))
+print(paste('number of controls: ', length(controldat)))
+```
+
+```{r}
+Cases<-as.integer(table(casedat))
+Controls<-as.integer(table(controldat))
+```
+
+```{r}
+X <- rbind(Cases,Controls)
+rownames(X) <- c("Cases","Controls")
+colnames(X) <- c("MM","Mm","mm")
+kable(X, format = "latex",  booktabs = T, caption = 'contingency table') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+#  Explore the data by plotting the percentage of cases as a function of the genotype, ordering the latter according to the number of M alleles. Which allele increases the risk of the disease?
+
+```{r}
+risk<-Cases/(Cases+Controls)
+plot(c(0,1,2),risk,ylim=c(0,1),type="b",
+xlab="Genotype",ylab="Risk", col='orchid', lwd=2)
+text(x = 0, y=0.2, 'mm', col='darkorchid')
+text(x = 1, y=0.2, 'Mm', col='darkorchid')
+text(x = 2, y=0.2, 'MM', col='darkorchid')
+```
+
+The allele that seems to increase the risk is M.
+
+```{r}
+Y <- cbind(2*X[,1]+X[,2],2*X[,3]+X[,2])
+colnames(Y) <- c("m","M")
+
+kable(Y, format = "latex",  booktabs = T, caption = 'allele contingency table') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+
+
+# Test for equality of allele frequencies in cases and controls by doing an alleles test. Report the test statistic, its reference distribution, and the p-value of the test. Is there evidence for different allele frequencies?
+
+We can conduct more than one allele test to analyze our contingency table.
+
+Fisher's exact test, although in practice it is employed when sample sizes are small, it is valid for all sample sizes.
+
+Since the sample is sufficiently big, and we don't have any cells with really small values, we can also use a $\chi^2$ test with 1 grade of freedom (based on the $\chi^2$ distribution).
+
+```{r}
+results <- chisq.test(Y,correct=FALSE)
+results$expected
+
+fisher.test(Y)
+
+chisq.test(Y,correct=FALSE)
+```
+
+
+
+Both the test give a very small p-value around $0.0002$, so we can strongly reject the null hypotesis that assumes same allele frequency.
+
+
+
+# Which are the assumptions made by the alleles test? Perform and report any addtional tests you consider adequate to verify the assumptions. Do you think the assumptions of the alleles test are met?
+
+The test assumes Hardy-Weinberg equilibrium.
+
+```{r}
+tot<-summary(genotype(data[,1], sep=''))
+tot<-tot$genotype.freq[,1]
+names(tot)<-c('AA','AB','BB')
+```
+
+```{r message=FALSE, warning=FALSE}
+resultsChiNoCorr <- HWChisq(tot, cc=0, verbose = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+resultsChiCorr <- HWChisq(tot, verbose = TRUE)
+```
+
+```{r}
+resultExact <- HWExact(tot, pvalue='selome', verbose=TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+resultPerm <- HWPerm(tot)
+```
+
+Conducting different test over the Hardy-Weimberg equilibrium, we don't have any evidence at all to reject the null hypotesis of it to be respected.
+
+#  Perform the Armitage trend test for association between disease and number of M alleles. Report the test statistic, its reference distribution and the p-value of the test. Do you find evidence for association?
+The trend test is based on the linear regression model:
+
+$$
+Y=\beta_{0}+\beta_{1} X+\varepsilon
+$$
+
+And the test-statistic is:
+
+$$
+A=\frac{\hat{\beta}_{1}^{2}}{V\left(\hat{\beta}_{1}\right)}=n \cdot r_{x y}^{2}
+$$
+
+```{r}
+cas <- rep(c(0,1,2),Cases)
+con <- rep(c(0,1,2),Controls)
+
+x <- c(rep(1,sum(Cases)),
+       rep(0,sum(Controls)))
+
+y <- c(cas,con)
+
+r <- cor(x,y)
+
+n <- sum(X)
+A <- n*(r^2)
+
+
+pvalue <- pchisq(A,df=1,lower.tail=FALSE)
+
+print(paste('test statistic A: ', A))
+print(paste('pvalue: ', pvalue))
+```
+
+We find strong evidence for association.
+
+# Test for association between genotype and disease status by a logistic regression of disease status on genotype, treating the latter as categorical. Do you find significant evidence for association? Which allele increase the risk for the disease? Give the odds ratios of the genotypes with respect to base line genotype mm. Provide 95% confidence intervals for these odds ratios.
+
+```{r}
+
+newy <- x
+newx <- y
+
+
+
+x.cat <- rep(NA,length(newx))
+x.cat[newx==0] <- "mm"
+x.cat[newx==1] <- "Mm"
+x.cat[newx==2] <- "MM"
+
+
+x.cat <- factor(x.cat)
+
+out1.lm <- glm(newy~x.cat, 
+          family = binomial(link = "logit"))
+
+
+summary(out1.lm)
+b <- coefficients(out1.lm)
+
+
+
+```
+
+
+Significant evidence for association is found. As expected from previous results, the 'M' allele increase the risk for the disease.
+
+```{r}
+print('odds ratios: ')
+
+ORs <- exp(b)
+ORs
+
+```
+
+```{r}
+V <- vcov(out1.lm)
+se <- sqrt(diag(V))
+
+ll <- b-qnorm(0.975)*se[2]
+ul <- b+qnorm(0.975)*se[2]
+
+ll.or <- exp(ll)
+ul.or <- exp(ul)
+
+print('confidence intervals:')
+print('lower:')
+ll.or
+print('upper')
+ul.or
+```
+

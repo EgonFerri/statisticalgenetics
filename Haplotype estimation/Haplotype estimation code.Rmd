@@ -1,0 +1,213 @@
+---
+title: 'Bioinformatics and Statistical Genetic'
+subtitle: 'Haplotype estimation'
+output:
+  pdf_document:
+    fig_height: 4
+    number_sections: yes
+    toc: yes
+  html_document:
+    toc: yes
+author: Leonardo Ortoleva & Egon Ferri
+---
+
+```{r}
+knitr::opts_chunk$set(echo = F)
+```
+
+
+
+```{r message=FALSE, warning=FALSE}
+require(genetics, quietly = T)
+require(viridis, quietly = T)
+require(knitr, quietly = T)
+require(purrr, quietly = T)
+require(HardyWeinberg, quietly = T)
+require(data.table, quietly = T)
+require(fitdistrplus, quietly = T)
+require(e1071, quietly = T)
+require(LDheatmap, quietly = T)
+require(tidyverse, quietly = T)
+require(kableExtra)
+require(haplo.stats)
+```
+
+# Load data into the R environment.
+
+```{r}
+data <- fread('APOE.dat', header = TRUE)
+data <- data.frame(data)
+```
+
+```{r}
+kable(data[1:10,1:7], format = "latex",  booktabs = T, caption = 'Data') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position') 
+```
+
+
+
+
+
+# How many individuals and how many SNPs are there in the database? What percentage of the data is missing?
+
+```{r}
+nInd <- dim(data)[1]
+nVar <- dim(data)[2]-1
+
+print(paste0('The number of individuals is ', nInd))
+print(paste0('The number of variants is ', nVar))
+``` 
+
+# Assuming all SNPs are bi-allelic, how many haplotypes can theoretically be found for this data set?
+
+```{r}
+theo_haplo<- 2^nVar
+print(paste0('The number of haplotypes that can theoretically be found for this data set is: ', format(theo_haplo, digits = 5)))
+```
+
+
+# Estimate haplotype frequencies using the haplo.stats package (set the minimum posterior probability to 0.001). How many haplotypes do you find? List the estimated probabilities in decreasing order. Which haplotype number is the most common?
+
+```{r}
+only_data<- data[2:ncol(data)]
+only_data<-apply(only_data, 1:2, function(x) str_replace_all(x, pattern = regex("/"), replacement = regex("")))
+```
+
+
+```{r}
+
+Geno <- cbind(substr(only_data[,1],1,1),substr(only_data[,1],2,2))
+
+for(i in 2:ncol(only_data)) {
+  Geno <- cbind(Geno,substr(only_data[,i],1,1),substr(only_data[,i],2,2))
+}
+            
+
+Snpnames <- paste("SNP",1:ncol(only_data),sep="")
+Haplo_Res <- haplo.em(Geno,locus.label=Snpnames,control=haplo.em.control(min.posterior=0.001))
+obser_haplo<-dim(Haplo_Res$haplotype)[1]
+print(paste0('The number of haplotypes observed in this data set is ', obser_haplo))
+prob<-Haplo_Res$hap.prob
+names(prob)<- c(1:31)
+sort(prob,decreasing = T)
+print('The the most common haplotype observed in this data set is the number:')
+sort(prob,decreasing = T)[1]
+```
+
+
+# Is the haplotypic constitution of any of the individuals in the database ambiguous or uncertain? For how many? What is the most likely haplotypic constitution of individual NA20763? (identify the constitution by the corresponding haplotype numbers).
+
+```{r}
+print(paste('The haplotypic constitution of these',
+             length(Haplo_Res$nreps[as.integer(Haplo_Res$nreps)>1]), 'individuals is ambiguous or uncertain:'))
+
+Haplo_Res$nreps[as.integer(Haplo_Res$nreps)>1]
+
+```
+
+Infact, the count of haplotype pairs that map to each subjects marker genotypes is greater than 1.
+
+The individual NA20763 (number $59$) has these three possibile compositions:
+
+```{r}
+print(paste0('Diplotype: ', Haplo_Res$hap1code[Haplo_Res$indx.subj==which(data['id']=="NA20763")],', ',
+Haplo_Res$hap2code[Haplo_Res$indx.subj==which(data['id']=="NA20763")],' with probability : ', Haplo_Res$post[Haplo_Res$indx.subj==which(data['id']=="NA20763")]))
+
+```
+
+The most likely haplotypic constitution of individual NA20763 is (28, 18) by far. 
+
+
+
+# Suppose we would delete polymorphism $rs374311741$ from the database prior to haplotype estimation. Would this affect the results obtained? Justify your answer.
+
+After removing the rs374311741 polymorphism, we redo the experiment and these are the results:
+
+```{r}
+which(colnames(only_data)=="rs374311741")
+only_data2<-only_data[,-2]
+
+
+Geno <- cbind(substr(only_data2[,1],1,1),substr(only_data2[,1],2,2))
+
+for(i in 2:ncol(only_data2)) {
+  Geno <- cbind(Geno,substr(only_data2[,i],1,1),substr(only_data2[,i],2,2))
+}
+            
+
+Snpnames <- paste("SNP",1:ncol(only_data2),sep="")
+Haplo_Res <- haplo.em(Geno,locus.label=Snpnames,control=haplo.em.control(min.posterior=0.001))
+obser_haplo<-dim(Haplo_Res$haplotype)[1]
+print(paste0('The number of haplotypes observed in this data set is ', obser_haplo))
+prob<-Haplo_Res$hap.prob
+names(prob)<- c(1:31)
+sort(prob,decreasing = T)
+```
+
+Since we are removing a monomorphic variant, we don't experiment any change in our result. Infact, a monomorphic variant doesn't increase the number of haplotypes configurations,$31$. And obviously doesn't modify the probability distribution neither.
+
+# Remove all genetic variants that have a minor allele frequency below 0.10 from the database, and re-run haplo.em. How does this affect the number of haplotypes?
+
+```{r}
+MAF<- function(snp){
+  res<- summary(genotype(snp, sep=''))
+  return(min(res$allele.freq))
+}
+
+mafs<- apply(only_data, 2, MAF)
+only_data2<-only_data[,which(mafs>=0.10)]
+
+Geno <- cbind(substr(only_data2[,1],1,1),substr(only_data2[,1],2,2))
+
+for(i in 2:ncol(only_data2)) {
+  Geno <- cbind(Geno,substr(only_data2[,i],1,1),substr(only_data2[,i],2,2))
+}
+            
+
+Snpnames <- paste("SNP",1:ncol(only_data2),sep="")
+Haplo_Res <- haplo.em(Geno,locus.label=Snpnames,control=haplo.em.control(min.posterior=0.001))
+obser_haplo<-dim(Haplo_Res$haplotype)[1]
+print(paste0('The number of haplotypes observed in this data set is ', obser_haplo))
+
+```
+
+Removing all the variants with very low minor allele frequency, we remove a lot of different combinations, so the number of different haplotypes drops sharply to $8$.
+
+# We could consider the newly created haplotypes in our last run of haplo.em as the alleles of a new superlocus. Which is, under the assumption of Hardy-Weinberg equilibrium, the most likely genotype at this new locus? What is the probability of this genotype? Which genotype is the second most likely, and what is its probability?
+
+The probability of the alleles of our superlocus are:
+
+```{r}
+prob<-Haplo_Res$hap.prob
+names(prob)<- c(1:8)
+
+sort(prob,decreasing = T)
+
+
+```
+
+Under the assumption of Hardy-Weinberg equilibrium, to find the probabilities of genotypes in our new locus we just need the [second moment](https://en.wikipedia.org/wiki/Autocorrelation#Matrix) of our vector of probabilities:
+
+```{r}
+prob<-as.numeric(c(prob))
+matrix<-outer(prob, prob)
+
+kable(data.frame(matrix,row.names = paste('p',c(1:8), sep = '')), col.names = paste('p',c(1:8), sep = ''), row.names = T, format = "latex",  booktabs = T, caption = 'Genotype Frequencies. Diagonal correspond to homozigotes probabilities, ohter cells represents probability of genotypes formed by the column and row alleles') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+
+```
+
+The two most likely genotypes probabilities are:
+
+```{r}
+
+rev(sort(matrix))[1]
+rev(sort(matrix))[2]*2
+```
+
+of, respectevly, (8,8), and (8,1) (the sum of the form (8,1) and (1,8)).
+
+
+
+
+

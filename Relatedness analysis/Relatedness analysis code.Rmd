@@ -1,0 +1,346 @@
+---
+title:  "Bioinformatics and Statistical Genetics"
+subtitle: 'Relatedness analysis'
+output:
+  pdf_document:
+    fig_height: 4
+    number_sections: yes
+    toc: yes
+  html_document:
+    toc: yes
+author: Leonardo Ortoleva & Egon Ferri
+---
+
+```{r setup, include=FALSE}
+# knitr options
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r libraries, include=FALSE}
+require(genetics, quietly = T)
+require(viridis, quietly = T)
+require(knitr, quietly = T)
+require(purrr, quietly = T)
+require(HardyWeinberg, quietly = T)
+require(data.table, quietly = T)
+require(fitdistrplus, quietly = T)
+require(e1071, quietly = T)
+require(LDheatmap, quietly = T)
+require(tidyverse, quietly = T)
+require(kableExtra, quietly = T)
+require(haplo.stats, quietly = T)
+require(MASS, quietly = T)
+
+```
+
+
+```{r input, include=FALSE}
+# Input / Output variables
+# Tuning parameters
+# ...
+```
+
+
+
+# The file CHD.zip contains genotype information, in the form of PLINK files **chd.fam**, **chd.bed** and **chd.bim**. The files contain genetic information of 109 presumably unrelated individuals of a sample of Chinese in Metropolitan Denver, CO, USA, and corresponds to the CHD sample of the 1,000 Genomes project (www.internationalgenome.org).
+
+# The **chd.bed** contains the genetic data in binary form. First convert the **.bed** file to a text file, **chd.raw**, with the data in (0, 1, 2) format.
+
+```{r echo=FALSE}
+
+#getwd()
+#setwd("C:/Users/Leonardo/Desktop/BIOINFORMATICS/ExericesR/Ex7/P072019_Relatedness")   # Dopo aver messo Plink folder in C.. così lo lancio da R
+
+runstring <- "plink --bfile CHD --recodeA --out CHD"
+runstring
+#system(runstring)
+```
+
+# Read the genotype data in (0, 1, 2) format into the R environment. Consult the pedigree information. Are there any documented family relationships for this data set? 
+
+```{r echo=FALSE}
+data <- fread("CHD.raw", header = T)
+
+kable((data[1:5,1:8]), format = "latex",  booktabs = T, caption = 'Data') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+```{r echo=FALSE}
+kable(summary(data[, 1:5]), format = "latex",  booktabs = T, caption = 'Summary') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+
+```
+
+
+
+In the first column there is the $family\ Id$, which permits to recognize the family of each individual (different for each one), plus the column mother and father are vectors of zeros, so we don't have relatedness informations.
+
+```{r echo=FALSE}
+print("The number of different families ID is: ")
+length(unique(data$FID))
+```
+
+
+# Compute the Manhattan distance between the inviduals on the basis of the genetic data. Use classical metric multidimensional scaling to obtain a map of the indivuals. Are the data homogeneous? Identify possible outliers.
+
+```{r echo=FALSE}
+only_geno<-data[,7:dim(data)[2]]
+
+#D<-dist(only_geno, method = "manhattan")
+#saveRDS(D, "D.rds")
+D <- readRDS("D.rds")
+D<-as.matrix(D)
+kable(D[1:5,1:5], format = "latex",  booktabs = T, caption = 'Submatrix') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+
+```{r include=FALSE}
+
+n<-nrow(only_geno)
+mds.out <- cmdscale(D,k=n-1,eig=TRUE)
+X <- mds.out$points[,1:2]
+
+
+```
+
+```{r echo=FALSE}
+plot(X[,1],X[,2],type="n", main="Map of the individuals",asp=1, xlab="First principal axis",ylab="Second principal axis")
+points(X[,1],X[,2],pch=4,cex=0.5, col='gold')
+```
+
+
+After a MDS with n-1 dimensions, the great part of the data is homogenous. 
+There are only two small group of outlier of two elements.
+
+```{r echo=FALSE}
+print('Outliers on the first principal axis:')
+X[,1][X[,1]< (-5000)]
+print('Outliers on the second principal axis:')
+X[,2][X[,2]< (-8000)]
+
+
+
+
+kable(data[c(3,18,62,89), 1:6], format = "latex",  booktabs = T, caption = 'Outliers') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+
+
+
+# Compute the average number of alleles shared between each pair of individuals over all genetic variants. Compute also the corresponding standard deviation. Plot the standard deviation against the mean. Do you think there are any pairs with a close family relationship? How many? Identify the corresponding individuals.
+
+```{r include=FALSE}
+X <- as.matrix(only_geno)  # from dataframe to matrix, important with a lot of data
+
+ibs.mean <- function(x,y) {
+   y <- mean(2 - abs(x - y),na.rm=TRUE)   # equal to number of shared alleles
+   return(y)
+}
+
+ibs.sd <- function(x,y) {
+   y <- sd(abs(x-y),na.rm=TRUE)
+   return(y)
+}
+
+
+n <- nrow(X)
+p <- ncol(X)
+
+
+Dmean <- matrix(NA,nrow=n,ncol=n)
+Dsd <- matrix(NA,nrow=n,ncol=n)
+
+#
+# calculate m,s for each pair of individuals
+#
+
+# for good per numeri piccoli, se no poco efficiente! (THX EGON)
+for(i in 1:n) {
+   for(j in 1:n) {
+      Dmean[i,j] <- ibs.mean(X[i,],X[j,])
+      Dsd[i,j] <- ibs.sd(X[i,],X[j,])
+   }
+}
+
+#Dmean[1:5,1:5]
+#Dsd[1:5,1:5]
+```
+
+
+```{r include=FALSE}
+ibs.m <- Dmean[lower.tri(Dmean)]   # prendo sotto la diagonale
+ibs.s <- Dsd[lower.tri(Dsd)]
+
+```
+
+```{r echo=FALSE}
+
+plot(ibs.m,ibs.s,xlim=c(1.2,1.6),ylim=c(0.48,0.7),xlab="Mean",ylab="Standard deviation" ,pch=4,cex=0.5, col='gold')  # mean vs sd
+
+
+```
+
+
+
+
+
+This plot reveals characteristic $clusters$ that correspond to the different family relationships.
+Looking at it, it's possible to see that almost all the individual have not family relationship. 
+
+
+
+But, if we analyze more in details the plot, there are 3 points with means between 1.4 and 1.6. This means that we have a close family relationship in 3 pairs of individuals.
+This relationships are probably respectively 2ND, PO and FS (from left to right), because we expepect that full siblings are very similiar, more than parents-sons, that are more similiar than 2nd grade relatives, that are more similiar than unrelated couples.
+
+```{r echo=FALSE}
+Z <- read.table("CHD.genome",header=TRUE)
+vect <- rbind.data.frame(Z[230,], Z[1138,], Z[4785,])
+vect=vect[,c(2,4)]
+vect[,3]=round(ibs.m[ibs.m>1.3],4)
+names(vect)[3]= 'Mean'
+vect[,4]=round(ibs.s[ibs.m>1.3],4)
+names(vect)[4]= 'Standar Deviation'
+
+kable(vect, format = "latex",  booktabs = T, caption = 'Relevant relationship') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+
+
+# Make a plot of the percentage of variants sharing no alleles versus the percentage of variants sharing two alleles for all pairs of individuals. Do you think there are any pairs with a close family relationship? How many? Identify the corresponding individuals.
+
+```{r echo=FALSE}
+
+stats <- function(x,y) {
+  aux <- 2-abs(x-y) # number of shared alleles
+  n0 <- sum(aux==0,na.rm=TRUE)
+  n1 <- sum(aux==1,na.rm=TRUE)
+  n2 <- sum(aux==2,na.rm=TRUE)
+  n <- sum(!is.na(aux))  # total amount of variants no missing
+  p0 <- n0/n
+  p1 <- n1/n
+  p2 <- n2/n
+  y <- c(p0,p1,p2)
+  return(y)
+}
+
+#sum(stats(X[1,],X[2,]))
+
+Mp0 <- matrix(NA,nrow=n,ncol=n)
+Mp1 <- matrix(NA,nrow=n,ncol=n)
+Mp2 <- matrix(NA,nrow=n,ncol=n)
+
+for(i in 1:n) {
+   for(j in 1:n) {
+      statsofapair <- stats(X[i,],X[j,])
+      Mp0[i,j] <- statsofapair[1]
+      Mp1[i,j] <- statsofapair[2]
+      Mp2[i,j] <- statsofapair[3]
+   }
+}
+
+p0vec <- Mp0[lower.tri(Mp0)]
+p2vec <- Mp2[lower.tri(Mp2)]
+
+# 'jitter' aggiunge NOISE alle variables per evitare sovrapposizioni nel plot
+# provare senza jitter -> si ferma a 0 e non va oltre (negativi)
+plot(jitter(p0vec, amount = 0.005),jitter(p2vec, amount = 0.005),asp=1,xlab="% variants 0 shared alleles",
+ylab="% variants 2 shared alleles",pch=4,cex=0.5, col='gold')
+#legend("topright",c("UN","PO"),col=c("blue","yellow"),pch=c(1,1))
+
+```
+
+Here, again, we have a plot that reveals $clusters$ that correspond to the different family relationship. The number of clusters and outliers is consistent with the previous case. 
+We have three outliers which are probably FS, PO and 2ND (from top to bottom), with a $p_0$ almost 0, but an higher $p_2$ (percentage of marker with 2 IBS alleles) than the big cluster of Unrelated. We added a little bit of jitter in order to avoid overlaps in the big cluster.
+
+```{r echo=FALSE}
+Z <- read.table("CHD.genome",header=TRUE)
+vect <- rbind.data.frame(Z[230,], Z[1138,], Z[4785,])
+vect=vect[,c(2,4)]
+vect[,3]=round(p0vec[ibs.m>1.3],4)
+names(vect)[3]= '% No shared alleles'
+vect[,4]=round(p2vec[ibs.m>1.3],4)
+names(vect)[4]= '% 2 shared alleles'
+
+kable(vect, format = "latex",  booktabs = T, caption = 'Relevant relationship') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+
+
+
+# Can you identify any obvious family relationships between any pairs? Argue your answer.   
+
+Yes, actually, our previous results are confirmed. The obvious relationships are the same we obtained and explained before.
+
+# Estimate the *Cotterman coefficients* for all pairs using PLINK. Read the coeffients into the R environment and plot the probability of sharing no IBD alleles against the probability of sharing one IBD allele. Add the theoretical values of the Cotterman coefficients for standard relationships to your plot. 
+
+```{r echo=FALSE}
+
+runstring <- "plink --bfile CHD --genome --genome-full --out CHD"
+
+print(paste0("Running the plink command "))
+print(paste0(runstring)) 
+print(" we obatin a CHD.genome file, which contains all the informations")
+print(" we need about IBD and Cotterman coefficients.")
+#system(runstring)
+
+Z <- read.table("CHD.genome",header=TRUE)
+#colnames(Z)
+
+#table(rel.pair,Z$RT)
+
+# quelli nel mezzo saranno di secondo grado
+# quelli in basso saranno UN
+# NON tutti UN o PO
+
+plot(Z$Z0,Z$Z1,asp=1,xlab=expression(k[0]),ylab=expression(k[1]),pch=4,cex=0.5, col='gold')
+#legend("topright",c("UN","PO"),col=c("blue","yellow"),pch=c(1,1))
+
+# provare anche col jitter
+```
+
+
+
+!["Cotterman coefficents"](cotter.jpg)
+
+
+ 
+# Make a table of pairs for which you suspect that they have a close family relationship, and list their Cotterman coefficients. State your final conclusions about what relationship these pairs probably have.
+
+```{r echo=FALSE}
+#which(Z$Z0<0.7)
+vect <- rbind.data.frame(Z[230,], Z[1138,], Z[4785,])
+vect<-vect[,c(2,4,7,8,9)]
+kable(vect, format = "latex",  booktabs = T, caption = 'Relevant relationship') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+The great part of points are UNRELATED, infact they have a $k_0$ almost to 1.
+The point with $k_0=0.22$ and $k_1=0.54$ approximately is an FS.
+Then we have a point at $k_0=0.47$ and $k_1=0.51$, that indicates a 2ND degree relationship (HS, AV or GG).
+Finally, the top left point is a PO with $k_1=1$.
+
+These results confirm all what we said in the previous answers.
+
+# Is there any relationship between the MDS map you made and the relationships between the individuals? Report your findings.
+
+All the four outliers that we found in the MDS map are part of the three relationship couple.
+
+In particular, $NA17981$ and $NA17986$ both are outlier on the same axis, and from our findings, they are Full Siblings, while $NA17976$ and $NA18116$ are Parent-Offspring.
+This make sense according to the analysis we did.
+Of the three pairs found, two are separated from the big cluster in the MDS, but very close to their relatives.
+
+
+# Which of the three graphics $(m,s)$, $(p_0,p_2)$ or $(k_0,k_1)$ do you like best for identifying relationships? Argue your answer. 
+
+First of all, all the three graphics are coerent each other and give us the same results at the end.
+We think that the first one, $(m,s)$, is the more intuitive because it's possible to see clearly the clusters and to undestand, thanks to the mean value, their relationship.
+But, as the Cotterman coefficients are theoretical values, thanks to the third plot we undestood without any doubt which kind of relationship our individuals have.
+
+
+
+

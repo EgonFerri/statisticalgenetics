@@ -1,0 +1,335 @@
+---
+title: 'Bioinformatics and Statistical Genetic'
+subtitle: 'Population substructure'
+output:
+  pdf_document:
+    fig_height: 4
+    number_sections: yes
+    toc: yes
+  html_document:
+    toc: yes
+author: Leonardo Ortoleva & Egon Ferri
+---
+
+
+```{r}
+knitr::opts_chunk$set(echo = F)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+require(genetics, quietly = T)
+require(viridis, quietly = T)
+require(knitr, quietly = T)
+require(purrr, quietly = T)
+require(HardyWeinberg, quietly = T)
+require(data.table, quietly = T)
+require(fitdistrplus, quietly = T)
+require(e1071, quietly = T)
+require(LDheatmap, quietly = T)
+require(tidyverse, quietly = T)
+require(kableExtra, quietly = T)
+require(haplo.stats, quietly = T)
+require(MASS, quietly = T)
+
+```
+
+# Load data into the R environment.
+
+```{r}
+data <- fread('Chr21.dat', header = TRUE)
+data <- data.frame(data)
+```
+
+```{r}
+kable(data[1:10,1:8], format = "latex",  booktabs = T, caption = 'Data') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position') 
+```
+
+```{r}
+only_geno<-data[,7:dim(data)[2]]
+```
+
+
+# Compute the Manhattan distance matrix between the individuals using R function dist. Include a submatrix of dimension 5 by 5 with the distances between the first 5 individuals in your report.
+
+```{r}
+#D<-dist(only_geno)
+#saveRDS(D, "D.rds")
+D <- readRDS("D.rds")
+D<-as.matrix(D)
+kable(D[1:5,1:5], format = "latex",  booktabs = T, caption = 'Submatrix') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+```
+
+
+# The Manhattan distance (also known as the $taxicab \  metric$) is identical to the Minkowsky distance with parameter $\lambda = 1$. How does the Manhattan distance relate to the allele sharing distance, where the latter is calculated as two minus the number of shared alleles?
+
+Let $x_{ijk}$ be the number of shared alleles of individual $i$ and $j$ for variant $k$
+Allele sharing distance:
+$$
+d_{ASk}(i, j, k)=2-x_{i j k}
+$$
+
+Typically averaged over K genetic variants:
+
+$$
+d_{AS}(i,j)=\frac{1}{K} \sum_{k=1}^{K} d_{ASk} = \frac{1}{K} \sum_{k=1}^{K} 2-x_{ijk}
+$$
+Manhattan distance: 
+
+$$
+d_{M}({i}, {j})=\|i-j\|_{1}=\sum_{k=1}^{K}\left|i_{k}-j_{k}\right|
+$$
+
+Since $i_k$ and $j_k$ can be only (0,1,2) (=AA, AB, BB), we see that the formulas are just identical. The only difference is that, if we apply the normalization of $\frac{1}{K}$, the $Allele\ sharing\ distance$ is the $Manhattan\ distance$ normalized by the number of variants.
+
+
+# Apply metric multidimensional scaling using the Manhattan distance matrix to obtain a map of the individuals, and include your map in your report. Do you think the data come from one homogeneous human population? If not, how many subpopulations do you think the data might come from, and how many individuals pertain to each suppopulation?
+
+```{r}
+n<-nrow(only_geno)
+mds.out <- cmdscale(D,k=n-1,eig=TRUE)
+X <- mds.out$points[,1:2]
+plot(X[,1],X[,2],type="n", main="Map of the individuals",asp=1, xlab="First principal axis",
+ylab="Second principal axis")
+points(X[,1],X[,2],pch=4,cex=0.5, col='gold')
+first_sub<-sum(X[,1]<0)
+Second_sub<-sum(X[,1]>0)
+```
+We can see easily that there are 2 subpopulations.
+
+```{r}
+kable(cbind(first_sub, Second_sub), col.names = c('First subpopulation', 'Second subpopulation'), format = "latex",  booktabs = T, caption = 'Sub populations') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+
+```
+
+# Report the first 10 eigenvalues of the solution
+
+```{r}
+
+kable(t(mds.out$eig[1:10]), format = "latex",  booktabs = T, caption = 'Eigenvalues') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+
+```
+
+
+# Does a perfect representation of this $n \times n$ distance matrix exist, in n or fewer dimensions? Why so or not?
+
+
+```{r}
+print(paste0('The goodness of fit is : ', mds.out$GOF[1]))
+
+```
+
+
+An exact representation of the matrix will existe in $n-1$ dimensions.
+In fact, we see that with $k=n-1$ we have a GOF of $1$, and the eigenvalues are all positives.
+
+We see that an eigenvalue $<0$ is found, but is computationally $0$.
+
+```{r}
+mds.out$eig[mds.out$eig<0]
+```
+
+
+# What is the goodness-of-fit of a two-dimensional approximation to your distance matrix? Explain which criterium you have used.
+
+Using the R function "cmdscale" with k=2, we obtain a new MDS with maximum 2 dimension of the space.
+
+```{r}
+mds.out2 <- cmdscale(D,k=2,eig=TRUE)   # proviamo solo con due
+
+print(paste0("The new goodness of fit is ",  round(mds.out2$GOF[1],4)))
+print(paste0("The dimensions of the points of our MDS are "))
+dim(mds.out2$points)
+
+
+```
+
+
+# Make a plot of the estimated distances (according to your map of individuals) versus the observed distances. What do you observe? Regress estimated distances on observed distances and report the coefficient of determination of the regression.
+
+```{r}
+X2 <- mds.out2$points[,1:2]
+
+Dest <- as.matrix(dist(X2))    #distances according to the two dimensional map
+
+Dobs.vec <- D[lower.tri(D)]
+Dest.vec <- Dest[lower.tri(Dest)]
+
+plot(Dobs.vec,Dest.vec,xlab="Observed",ylab="Fitted", pch=4,cex=0.5, col='gold', ylim = c(0,150), xlim=c(0,400))
+linmod<-lm(Dest.vec~Dobs.vec)
+
+lines(Dobs.vec,linmod$fitted.values, col="darkred", lwd=1, lty=2)
+
+abline(0,1,col="darkorchid", lwd=2)   
+
+print(paste0("The coefficient of correlation is: ", round(cor(Dobs.vec,Dest.vec),4)))
+
+sum<-summary(linmod)
+
+print(paste0("The R^2 (coefficient of determination of the regression) is: ", round(sum$r.squared,4)))
+
+
+```
+
+We can observe that, even if we are clearly underestimating, a pattern between estimated and observed distances can be surely seen . This is confirmed also by the coefficient of correlation we obtained.
+
+
+# We now try non-metric multidimensional scaling using the isoMDs instruction. We use a random initial configuration. Make a plot of the two-dimensional solution. Do the results support that the data come from one homogeneous population? Try some additional runs of isoMDS with different initial configurations, or eventually using the classical metric solution as the initial solution. What do you observe?
+
+```{r}
+set.seed(12345)
+init <- scale(matrix(runif(2*n),ncol=2),scale=FALSE)
+nmds.out <- isoMDS(D,k=2,y=init)
+
+Y <- nmds.out$points
+plot(Y[,1],Y[,2],type="n", main="Map of the individuals (Non-metric MDS)",asp=1, xlab="First principal axis",
+ylab="Second principal axis")
+points(Y[,1],Y[,2],pch=4,cex=0.5, col='gold')
+
+```
+
+In this case, starting from a random inital configuration, the results of non-metric MDS seems to support that the data come from one homogeneous population.
+
+```{r}
+set.seed(123456)
+init <- scale(matrix(runif(2*n),ncol=2),scale=FALSE)
+nmds.out <- isoMDS(D,k=2,y=init)
+
+Y <- nmds.out$points
+plot(Y[,1],Y[,2],type="n", main="Map of the individuals (Non-metric MDS)",asp=1, xlab="First principal axis",
+ylab="Second principal axis")
+points(Y[,1],Y[,2],pch=4,cex=0.5, col='gold')
+
+```
+
+With different starting values, like in the metric approach, we again can support the hypotesis of two subpopulations.
+
+```{r}
+init2 <- mds.out2$points
+nmds.out2 <- isoMDS(D,k=2,y=init2)
+
+Y2 <- nmds.out2$points
+plot(Y2[,1],Y2[,2],type="n", main="Map of the individuals (Non-metric MDS)",asp=1, xlab="First principal axis",
+ylab="Second principal axis")
+points(Y2[,1],Y2[,2],pch=4,cex=0.5, col='gold')
+```
+Using the classical metric (previously calculated) solution as the initial configuration, we observe that the result is very similar to the metric MDS and different from the first one with non metric.
+
+We can also observe that the stress value is smaller than the first case, but greater than the second, and that it converges in only two steps.
+
+
+
+# Set the seed of the random number generator to 123. Then run isoMDS a hundred times, each time using a different random initial configuration using the instructions above. Save the final stress-value and the coordinates of each run. Report the stress of the best run, and plot the corresponding map.
+
+```{r}
+set.seed(123)
+stressMin <- 1000
+
+for (i in 1:100) {
+  init <- scale(matrix(runif(2*n),ncol=2),scale=FALSE)
+  nmds.out <- isoMDS(D,k=2,y=init, trace = F)
+  stress <- nmds.out$stress
+  if(stress<stressMin) {
+    stressMin <- stress
+    YBest <- nmds.out$points
+    nmds.outBest <- nmds.out
+  }
+}
+print(paste0("The stress of the best run is: ", round(stressMin,4)))
+plot(YBest[,1],YBest[,2],type="n", main="Map of the individuals (Non-metric MDS)",asp=1, xlab="First principal axis",
+ylab="Second principal axis")
+points(YBest[,1],YBest[,2],pch=4,cex=0.5, col='gold')
+```
+
+
+
+# Make again a plot of the estimated distances (according to your map of individuals of the best run) versus the observed distances, now for the two-dimensional solution of non-metric MDS. Regress estimated distances on observed distances and report the coefficient of determination of the regression.
+
+```{r}
+Ybest <- nmds.outBest$points[,1:2]
+
+Dest <- as.matrix(dist(Ybest))    #distances according to the two dimensional map
+
+Dobs.vec <- D[lower.tri(D)]
+Dest.vec <- Dest[lower.tri(Dest)]
+
+plot(Dobs.vec,Dest.vec,xlab="Observed",ylab="Fitted", pch=4,cex=0.5, col='gold', ylim = c(0,15), xlim=c(0,400))
+linmod<-lm(Dest.vec~Dobs.vec)
+lines(Dobs.vec,linmod$fitted.values, col="darkred", lwd=1, lty=2)
+abline(0,1,col="darkorchid", lwd=2)   
+
+print(paste0("The coefficient of correlation is: ", round(cor(Dobs.vec,Dest.vec),4)))
+
+sum<-summary(linmod)
+
+print(paste0("The R^2 (coefficient of determination of the regression) is: ", round(sum$r.squared,4)))
+```
+
+Again, we can observe that a pattern between estimated and observed distances can be surely seen . This is confirmed also by the coefficient of correlation we obtained.
+
+Using the non-metric procedure we can observe greater underestimation.
+
+# Compute the stress for a $1, 2, 3, 4, . . . , n$-dimensional solution, always using the classical MDS solution as an initial configuration. How many dimensions are necessary to obtain a good representation with a stress below 5? Make a plot of the stress against the number of dimensions.
+
+
+
+```{r}
+stress<- function(i){
+  yinit <- mds.out$points[,1:i]
+  nmds.out <- isoMDS(D,k=i,y=yinit, trace = F)
+  return(nmds.out$stress)
+}
+
+```
+
+
+```{r}
+result<-mapply(c(2:100), FUN=stress)
+```
+
+```{r}
+plot(c(2:100),result,type="p", main=("Stress versus dimensionality"), xlab = "Number of dimensions", ylab = "Stress", col=viridis(99))
+abline(h=5, col='darkorchid', lwd=2, lty=3)
+```
+
+```{r}
+plot(c(2:100),result,type="p", main=("Stress versus dimensionality zoom"), xlab = "Number of dimensions", ylab = "Stress", col=viridis(99), ylim = c(0,10), xlim = c(25, 45))
+abline(h=5, col='darkorchid', lwd=2, lty=3)
+abline(v=36, col='darkorchid', lwd=2, lty=3)
+
+```
+ 
+We plotted the stress against the number of dimensions only for the first $100$, due to the exploding computational cost of $isoMDS$ with respect to the number of dimensions.
+
+We can see that,  a good representation with a stress below 5 is reached starting from a $k=36$ where the stress is:
+
+```{r}
+result[35]
+```
+
+
+# Compute the correlation matrix between the first two dimensions of a metric MDS and the two-dimensional solution of your best non-metric MDS. Make a scatterplot matrix of the 4 variables. Comment on your findings.
+
+
+```{r}
+
+Z <- nmds.outBest$points[,1:2]   # estraggo le prime due dimensioni
+
+
+R <- cbind(X2,Z)
+colnames(R) <- c("MDS-1","MDS-2","NMDS-1","NMDS-2")
+
+pairs(R, col='gold', pch=8, main='Scatterplot matrix')
+
+# ci fa vedere correlation nelle due dim per metric and non-metric
+kable((round(cor(R),digits=2)), format = "latex",  booktabs = T, caption = 'Correlation matrix') %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), latex_options = 'HOLD_position')
+
+```
+
+We can observe that MDS-1 is perfectly negativly correlated with the NMDS-2.
+MDS-2 is also negativly correlated with the NMDS-1, but more weakly.

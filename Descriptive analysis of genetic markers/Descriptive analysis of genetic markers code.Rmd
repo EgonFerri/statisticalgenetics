@@ -1,0 +1,341 @@
+---
+title: 'Bioinformatics and Statistical Genetic'
+subtitle: 'Descriptive analysis of genetic markers'
+output:
+  pdf_document:
+    fig_height: 4
+    toc: yes
+  html_document:
+    toc: yes
+author: Leonardo Ortoleva & Egon Ferri
+---
+
+```{r message=FALSE, warning=FALSE}
+require(genetics, quietly = T)
+require(viridis, quietly = T)
+require(knitr, quietly = T)
+require(purrr)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1 SNP dataset
+
+
+## 2 Load and clean the data
+
+```{r}
+data<- read.table('CHDCHR22RAW.raw', header = TRUE)
+```
+
+```{r}
+data[c(1, 3, 4, 6)] <- list(NULL) 
+```
+
+```{r}
+kable(data[1:10,1:5])
+```
+
+## 3 How many variants are there in this database? What percentage of the data is missing? How many individuals in the database are males and how many are females?
+
+
+```{r}
+nvariants=dim(data)[2]-2
+napercentage=sum(is.na(data))/(length(data)*nrow(data))*100
+
+print(paste0('The number of variants is ', nvariants))
+print(paste0('Percentage of the data is missing is ', napercentage, '%'))
+
+```
+
+```{r}
+data$SEX[data$SEX==1]<- 'M'
+data$SEX[data$SEX==2]<- 'F'
+data[data==0]<-'AA'
+data[data==1]<-'AB'
+data[data==2]<-'BB'
+```
+
+```{r}
+kable(table(data$SEX))
+```
+
+
+## 4 Calculate the percentage of monomorphic variants. Exclude all monomorphics from the database for all posterior computations of the practical. How many variants do remain in your database?
+
+```{r}
+is_mono<- function(snp){
+  res<- summary(genotype(snp, sep=''))
+  return(max(res$genotype.freq)==109)
+}
+```
+
+
+```{r}
+onlygeno<- data
+onlygeno[c(1, 2)] <- list(NULL) 
+```
+
+
+```{r}
+y <- apply(onlygeno, 2, is_mono)
+```
+
+```{r}
+monoperc<-sum(y)/dim(onlygeno)[2]*100
+print(paste0('Monomorphic percentage is ', round(monoperc,2), '%'))
+```
+
+```{r}
+monos<-y[y==T]
+data_nomo<- data
+data_nomo[names(monos)]<- list(NULL)
+onlygeno[names(monos)]<-list(NULL)
+```
+
+
+```{r}
+print(paste0('There are', dim(onlygeno)[2], ' variants still in the database'))
+```
+
+## 5 Report the genotype counts and the minor allele count of polymorphism rs3729688_G, and calculate the MAF of this variant.
+
+```{r}
+res<-summary(genotype(data$rs3729688_G, sep=''))
+res
+```
+
+```{r}
+print(res$genotype.freq[,1])
+MAF<-min(res$allele.freq)
+MAC<-min(res$allele.freq[,1])
+print(paste0('Minor allele count is ', MAC, ', minimum allele frequency is ',
+             round(MAF,3)))
+```
+
+
+## 6 Compute the minor allele frequencies (MAF) for all markers, and make a histogram of it. Does the MAF follow a uniform distribution? What percentage of the markers have a MAF below 0.05? And below 0.01? Can you explain the observed pattern?
+
+
+```{r}
+MAF<- function(snp){
+  res<- summary(genotype(snp, sep=''))
+  return(min(res$allele.freq))
+}
+```
+
+```{r}
+mafs<- apply(onlygeno, 2, MAF)
+```
+
+```{r}
+hist(mafs, breaks = 30, col=viridis(30), border='white',
+     main=title("Histogram of MAF"),
+     xlab = "MAF")
+```
+
+```{r}
+mafs_small<-mafs[mafs<0.05]
+hist(mafs_small, breaks = 10, col=viridis(10), border='white',
+     main = title("Histogram of MAF < 0.05"),
+     xlab = "MAF")
+```
+
+```{r}
+mafs_small_perc=length(mafs[mafs<0.05])/length(mafs)*100
+mafs_very_small_perc=length(mafs[mafs<0.01])/length(mafs)*100
+
+print(paste0(round(mafs_small_perc,3), '% of the markers have a MAF below 0.05,',
+             round(mafs_very_small_perc,3), 
+             '% below 0.01'))
+```
+
+We have a lot of very small minor allele frequencies, because probably there are a lot of snippets where variation are very rare, so rare that we can hardly define the genotype as polymorphic (the term polymorphism is sometimes reserved for marker where the most common allele has a frequency below 99%).
+So, the MAF doesn't follow an uniform distribution because there are a lot SNPs which are almost monomorphic (with a MAF near 0).
+
+## 7 Calculate the minor allele frequency for males and for females and present a scatterplot of these variables. What do you observe? Calculate and report their correlation coefficient
+
+
+```{r}
+onlymales<- subset(data_nomo, SEX =='M')
+onlyfemales<- subset(data_nomo, SEX =='F') 
+
+onlymales[c(1,2)] <- list(NULL)
+onlyfemales[c(1,2)] <- list(NULL)
+
+
+```
+
+```{r}
+maf_male=apply(onlymales, 2, MAF)
+maf_female=apply(onlyfemales, 2, MAF)
+```
+
+```{r}
+maf_male[maf_male==1]<-0
+maf_female[maf_female==1]<-0
+plot(maf_male, maf_female, col=magma(13192),
+     main = title("Scatterplot MAF male and female"))
+abline(a=0, b=1)
+```
+
+In this scatterplot we can see that the gender doesn't influence so much the final MAF, in fact they are strictly correlated.
+
+
+```{r}
+correlation<-cor(maf_male, maf_female)
+print(paste0('The correlation coefficient is: ', round(correlation,2)))
+```
+
+## 8 Calculate the observed heterozygosity $H_o$, and make a histogram of it. What is, theoretically, the range of variation of this statistic?
+
+```{r}
+observed_hetero<- function(snp){
+  res<- summary(genotype(snp, sep=''))
+  return(res$genotype.freq[2,2])
+}
+
+obs<- apply(onlygeno, 2, observed_hetero)
+```
+
+```{r}
+hist(obs, breaks = 30, col=viridis(68), border='white', 
+     xlab = 'Observed heterozygosity', main = "Histogram of Ho")
+```
+
+
+Theoretically, we should expect that the range of this statistic should be from 0 to 1, but we observe only values that are at maximium 0.6513.
+
+
+## 9 Compute for each marker its expected heterozygosity $H_e$. Make a histogram of the expected heterozygosity. What is, theoretically, the range of variation of this statistic? What is the average of $H_e$ for this database?
+
+
+
+```{r}
+expected_hetero<- function(snp){
+  res<- summary(genotype(snp, sep=''))
+  return(res$Hu)
+}
+```
+
+```{r}
+expect<- apply(onlygeno, 2, expected_hetero)
+```
+
+```{r}
+hist(expect, breaks = 30, col=viridis(68), border='white', 
+     xlab = 'Expected heterozygosity', 
+     main=title("Histogram of He"))
+```
+
+
+
+The expected heterozygosity for a two-allele system is described by a concave down parabola that starts at zero (when p = 0) goes to a maximum at p = 0.5 and goes back to zero when p = 1, so the range of variation is [0, 0.5].
+
+
+
+
+```{r}
+print(paste0('The average expected heterozigosity for this database is: ', 
+             round(mean(expect),4)))
+
+```
+
+
+# 2 STR dataset
+
+
+## 1. The file FrenchStrs.dat contains genotype information (STRs) of individuals from a French population. STR data starts at the second column. Load this data into the R environment.
+
+
+```{r}
+data<- read.table('FrenchSTRs.dat', header = TRUE)
+```
+
+```{r}
+kable(data[1:10,1:5])
+```
+
+## 2 How many individuals and how many STRs contains the database?
+
+```{r}
+dim(data)
+
+print(paste0('We got ', dim(data)[1]/2, 
+             ' individuals, with each genotype splitted in two rows and ',
+             dim(data)[2]-1,' STRs'))
+```
+
+## 3 The value -9 indicates a missing value. Replace all missing values by NA. What percentage of the total amount of datavalues is missing?
+
+
+```{r}
+
+onlySTR <- data.frame(data[2:length(data)])
+
+onlySTR[onlySTR==-9] <- NA
+
+perMis = sum(is.na(onlySTR))/(length(onlySTR)*nrow(onlySTR))*100
+print(paste0("Percentage of missing: ", round(perMis, 2), "%"))
+
+```
+
+## 4 Write a function that determines the number of alleles for a STR. Determine the number of alleles for each STR in the database. Compute basic descriptive statistics of the number of alleles (mean, standard deviation, median, minimum, maximum).
+
+```{r}
+
+nAlleles <- function(x) {
+  y <- length(unique(x[!is.na(x)]))
+  return(y)
+}
+
+nAll <- apply(onlySTR, 2, nAlleles) 
+basic_stats<- nAll
+kable(summary(data.frame(basic_stats)))
+print(paste0("Standard deviation: ", round(sd(nAll), 2)))
+```
+
+## 5 Make a table with the number of STRs for a given number of alleles and present a barplot of the number STRs in each category. What is the most common number of alleles for an STR?
+
+```{r}
+barplot(table(nAll), col=viridis(12), border='white',
+        main = 'Barplot of the number of STRs in each category',
+        xlab = 'Number of alleles')
+```
+
+The most common number of alleles for STRs is $6$.
+
+## 6 Compute the expected heterozygosity for each STR. Make a histogram of the expected heterozygosity over all STRS. Compute the average expected heterozygosity over all STRs.
+
+```{r}
+exp_eter<-function(x){
+ 1-sum(prop.table(table(x))^2) 
+}
+
+expected<- apply(onlySTR, 2, exp_eter)
+```
+
+
+```{r}
+hist(expected, breaks = 19, col=viridis(68), border='white', main = 'Histogram of Ho')
+```
+
+```{r}
+print(paste0('The average expected heterozygosity over all STRsmean(expected) is ', 
+             round(mean(expected),3)))
+```
+
+## 7 Compare the results you obtained for the SNP database with those you obtained for the STR database. What differences do you observe between these two types of genetic markers?
+
+We have a lot of differences.
+
+First of all, we have some differences in the datasets; the sample size of the first dataset is a lot bigger, and it does not have missing values (instead the second small dataset has a 4% of NAs).
+
+While in the first dataset we have only $2$ possible alleles, in the second one we have a lot of them (between $3$ and $16$, with a peak on $6$), this obviously affect the computation of the expected heterozygosity, that is a lot bigger.
+
+
+
+

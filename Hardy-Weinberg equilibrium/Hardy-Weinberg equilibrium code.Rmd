@@ -1,0 +1,440 @@
+---
+title: 'Bioinformatics and Statistical Genetic'
+subtitle: 'Hardy-Weinberg equilibrium'
+output:
+  pdf_document:
+    fig_height: 4
+    toc: yes
+  html_document:
+    toc: yes
+author: Leonardo Ortoleva & Egon Ferri
+---
+
+```{r message=FALSE, warning=FALSE}
+require(genetics, quietly = T)
+require(viridis, quietly = T)
+require(knitr, quietly = T)
+require(purrr, quietly = T)
+require(HardyWeinberg, quietly = T)
+require(data.table, quietly = T)
+require(fitdistrplus, quietly = T)
+require(e1071, quietly = T)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+```
+
+
+## 1 Load and clean data 
+
+
+```{r}
+data <- fread('TSIChr22v4.raw', header = TRUE)
+data <- data.frame(data)
+```
+
+```{r}
+kable(data[1:10,1:7])
+```
+
+```{r}
+data <- data[7:ncol(data)]
+```
+
+
+## 2 How many individuals does the database contain, and how many variants? What percentage of the variants is monomorphic? Remove all monomorphic SNPs from the database. How many variants remain in the database?
+
+
+```{r}
+nInd <- dim(data)[1]
+nVar <- dim(data)[2]
+```
+
+```{r echo=FALSE}
+print(paste0('The number of individuals is ', nInd))
+print(paste0('The number of variants is ', nVar))
+```
+
+
+```{r}
+is_mono<- function(snp){
+  if(dim(table(snp))==1)
+    return(TRUE)
+  else 
+    return(FALSE)
+}
+```
+
+
+```{r}
+#y <- apply(data, 2, is_mono)
+```
+
+
+
+```{r}
+#nomos<-y[y==F]
+#data_nomo<- data
+#data_nomo <- data_nomo[names(nomos)]
+
+```
+
+```{r}
+#saveRDS(data_nomo, "clean.rds")
+data_nomo <- readRDS("clean.rds")
+```
+
+```{r echo=FALSE}
+monoperc<-dim(data_nomo)[2]/dim(data)[2]*100
+print(paste0('Monomorphic percentage is ', round(monoperc,2), '%'))
+```
+
+```{r echo=FALSE}
+print(paste0('After removing monomorphic SNPs, there are ', dim(data_nomo)[2], ' variants still in the database'))
+```
+
+
+## 3 Extract polymorphism rs587756191_T from the datamatrix, and determine its genotype counts. Apply a chi-square test for Hardy-Weinberg equilibrium, with and without continuity correction. Also try an exact test, and a permutation test. You can use function HWChisq, HWExact and HWPerm for this purpose. Do you think this variant is in equilibrium?
+
+
+```{r}
+dataRS <- data_nomo$rs587756191_T
+
+result <- table(dataRS)
+result[3] <- 0
+names(result) <- c("AA", "AB", "BB")
+```
+
+```{r}
+print(paste0("The genotype count is: "))
+result
+
+#mat <- matrix(apply(data_nomo, 2, table),nrow = 3)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+resultsChiNoCorr <- HWChisq(result, cc=0, verbose = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+resultsChiCorr <- HWChisq(result, verbose = TRUE)
+```
+
+```{r}
+resultExact <- HWExact(result, pvalue='selome', verbose=TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+resultPerm <- HWPerm(result)
+```
+
+
+
+As the Chi-square test is not so good with extreme allele frequencies, it's better to analyze the results of Exact and Permutation tests. 
+
+In both cases we obtain a p-value=1, so we can conclude that for the polymorphism $rs587756191\_T$ there is no evidence at all for rejecting the null hypothesis of the HW equilibrium.
+
+
+## 4 Determine the genotype counts for all these variants, and store them in a p x 3 matrix.
+
+
+
+```{r}
+genotypeCount <- function(x){
+  AA <- sum(x==0)
+  AB <- sum(x==1)
+  BB <- sum(x==2)
+  return(as.numeric(c(AA,AB,BB)))
+}
+
+
+matr <- apply(data_nomo, 2, genotypeCount)
+matr <- t(matr)
+colnames(matr) <- c("AA", "AB", "BB")
+kable(head(matr))
+```
+
+
+
+## 5 Apply a chi-square test without continuity correction for Hardy-Weinberg equilibrium to each SNP. You can use HWChisqStats for this purpose. How many SNPs are significant ?
+
+
+```{r include=FALSE}
+chiSqOut <- HWChisqStats(matr, pvalues = T)
+
+```
+
+```{r echo=FALSE}
+signi<-sum(chiSqOut<0.05)
+print(paste0("The number of significant SNPs is: ", signi))
+```
+
+
+We have 8162 values with a p-value < 0.05.
+It means that for these SNPs we should reject the null hypothesis of HWE, using a chi squared test (but again, maybe For all the extreme allele frequencies SNPs the result are not fully reliable)
+
+
+## 6 How many markers of the remaining non-monomorphic markers would you expect to be out of equilibrium by the effect of chance alone?
+```{r}
+
+perc<- signi*100/length(chiSqOut)
+print(paste0('Percentage of out of equilibrium SNPs is: ', round(perc,3), '%'))
+```
+
+If we consider test result reliable, the value is not so far from the 5% that we would expect from chance alone (assuming that we are using an $\alpha$ of 0.05)
+
+## 7 Which SNP is most signifcant according to the chi-square test results? Give it genotype counts. In which sense is this genotypic composition unusual?
+
+```{r}
+chiSqOut2 <- HWChisqStats(matr)
+
+mChi <- max(chiSqOut2)
+
+```
+
+```{r echo=FALSE}
+print(paste0("The most significant SNP has a value of : ", mChi, " with a p-value: ", chiSqOut['rs361582_C']))
+```
+
+Actually, there are more than one significant SNPs with the same p-value and Chi square value.
+
+```{r echo=FALSE}
+print(paste0(names(chiSqOut2[chiSqOut2==mChi])))
+#print("The genotype count is: ")
+#matr['rs577591184_T',]
+
+```
+
+The genotypic composition of the more significant Chi square test is:
+
+AA 106
+AB 0
+BB 1
+
+This is an unusual composition because we are in a quasi-monomorphic situation where the only allele which is not 'AA' is a homo-zygote 'BB'. This is a very strange/ extremely rare composition, since if we have only two 'B' alleles, we expect that with probability almost one they will pair with 'A' alleles. We could suppose it is a genotyping error. However since the sample of individual is not so big (only 107 observation) we have to admit than this can also be possible (although, again, extremely rare).
+
+## 8 Apply an Exact test for Hardy-Weinberg equilibrium to each SNP. You can use function HWExactStats for fast computation. How many SNPs are significant. Is the result consistent with the chi-square test?
+
+
+```{r}
+exTest <- HWExactStats(matr)
+```
+
+```{r echo=FALSE}
+print(paste0("There are ", sum(exTest<0.05), " significant SNPs with a p-value<0.05"))
+```
+
+The result is quite consistent with Chi-square test.
+
+## 9 Which SNP is most significant according to the exact test results? Give its genotype counts. In which sense is this genotypic composition unusual?
+
+
+```{r}
+minEx <- min(exTest)
+
+ind <- which(exTest==minEx)
+
+print(paste0("The most significant SNP is ", names(data_nomo[ind]),
+             " and has a p-value of ", minEx))
+
+matr[ind,]
+
+```
+
+We have again a very unlikely configuration, and the explanation is similar to the one given in answer 7. It is really really strange to have only Homo-zygotes, because it means that, in the former generation, we had 0 mating between 'AA' and 'BB', and this is in a strong opposition with one of the assumptions of the HW equilibrium that assumes "Random mating (w.r.t the trait under study)".
+
+
+## 10 Apply a likelihood ratio test for Hardy-Weinberg equilibrium to each SNP, using the HWLratio function. How many SNPs are significant. Is the result consistent with the chi-square test?
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+raTestF <- function(x){
+  res <- HWLratio(x, verbose = F)
+  return(res$pval)
+}
+
+raTest <- apply(matr, 1, raTestF)
+
+```
+
+
+```{r echo=FALSE}
+mRa <- min(raTest)
+print(paste0("The number of significant SNPs is: ", sum(raTest<0.05)))
+```
+
+The result is again consistent with the Chi-Squared test.
+
+
+```{r}
+
+print(paste0("The most significant SNP is ",names(which(raTest==mRa)) ," and has a p-value of : ", mRa))
+
+matr['rs2212153_A',]
+```
+
+
+The situation for the most significant SNP is analogous to previous cases.
+
+
+## 11 Apply a permutation test for Hardy-Weinberg equilibrium to the first 10 SNPs, using the classical chi-square test (without continuity correction) as a test statistic. List the 10 p-values, together with the 10 p-values of the exact tests. Are the result consistent?
+
+```{r warning=FALSE}
+only10 <- matr[1:10,]
+
+permF <- function(x){
+  res <- HWPerm(x, verbose = F)
+  return(res$pval)
+}
+
+permTest <- apply(only10, 1, permF)
+```
+
+```{r}
+kable(cbind(permTest, exTest[1:10]), col.names = c("permutation test", "exact test"))
+```
+
+
+The results are pretty consistent.
+
+
+
+## 11 Depict all SNPs simultaeneously in a ternary plot with function HWTernaryPlot and comment on your result (because many genotype counts repeat, you may use UniqueGenotypeCounts to speed up the computations)
+
+```{r}
+
+umatr <- UniqueGenotypeCounts(matr)
+umatr <- umatr[1:3]
+
+out <- HWTernaryPlot(umatr, cex = 0.25, pch=2)
+
+```
+
+We can see that genotypes concentrate in the zone of equilibrium, and even the genotypes out of equilibrium are more concentrated in the zones around the equilibrium zone.
+
+
+## 13 Can you explain why half of the ternary diagram is empty?
+
+We guess that this is happening because in this dataset the more frequent allele is always marked as A, so we can't have more 'BB' than 'AA' (and we can't have genotypes without 'AA', except for the practically impossible case of 107 'AB').
+
+## 14 Make a histogram of the p-values obtained in the chi-square test. What distribution would you expect if HWE would hold for the data set? Make a Q-Q plot of the p values obtained in the chi-square test against the quantiles of the distribution that you consider relevant. What is your conclusion?
+
+```{r}
+hist(chiSqOut, col=viridis(20,alpha = 0.8,begin = 0.2), border='white', main=title("Histogram of Chi Square test"), xlab = "p-value")
+```
+
+For construction, if HWE would hold for the data set we would expect an uniform distribution.
+
+
+
+```{r}
+y <- qunif(ppoints(length(chiSqOut)))
+qqplot(y,chiSqOut,  col='gold', pch=3, main=title("Q-Q plot Chi Square test - Uniform distribution"), xlab = "uniform quantile", ylab = "p-value chi square")
+abline(a = 0, b=1, col='darkred', lwd=3)
+```
+
+We can conclude clearly that we are not following an uniform distribution.
+
+## 15 Imagine that for a particular marker the counts of the two homozygotes are accidentally interchanged. Would this affect the statistical tests for HWE? Try it on the computer if you want.
+
+```{r message=FALSE, warning=FALSE}
+
+firstSNP <- matr[1,]
+
+
+switched<- rev(firstSNP)
+names(switched)<-names(firstSNP)  
+
+
+kable((cbind(HWAlltests(firstSNP, verbose = F), HWAlltests(switched, verbose = F))), col.names = c("normal stat", "normal p-value", "switched stat", "switched p-value"))
+```
+
+
+Obviously, this will not affect statistical tests for HWE.
+
+
+
+## 16 Compute the inbreeding coeficient for each SNP, and make a histogram of f. You can use function HWf for this purpose. Give descriptive statistics (mean, standard deviation, etc) of f calculated over the set of SNPs. What distribution do you expect f to follow theoretically? Use a probability plot to confirm your idea.
+
+
+```{r}
+fInbreeding <- apply(matr, 1, HWf)
+
+```
+
+
+The descriptive statistics are:
+
+```{r}
+kable(summary(data.frame(fInbreeding)))
+
+print(paste0("Standard deviation: ", round(sd(fInbreeding), 4)))
+```
+
+
+
+```{r}
+hist(fInbreeding, col=viridis(20,alpha = 0.8,begin = 0.2), border='white', xlim = c(-0.4,0.4), main = title("Histogram of inbreeding coefficient"), probability = T)
+```
+
+```{r}
+hist(fInbreeding, col=viridis(20,alpha = 0.8,begin = 0.2), border='white', xlim = c(-0.4,0.4), main = title("Histogram of inbreeding coefficient"))
+
+myhist <- hist(fInbreeding,plot = F)
+multiplier <- myhist$counts / myhist$density
+
+FIT<-fitdistr(fInbreeding,"normal")
+xfit <- seq(min(fInbreeding), max(fInbreeding), length = 1000) 
+yfit <- dnorm(xfit, mean = FIT$estimate[1], sd = FIT$estimate[2]) 
+yfit <- yfit* multiplier[1]
+
+lines(xfit, yfit, col = "black", lwd = 2)
+```
+
+We expect a normal distribution, and apart from the peak near zero, we kinda get that.
+We see that we have an almost normal distribution, very skewed to the right, and very leptokurtic, since we have a strong peak near the mean.
+
+
+```{r}
+values=c('skewness'=skewness(fInbreeding), 'kurtosis'= kurtosis(fInbreeding))
+```
+
+```{r}
+kable(values, col.names = 'f Inbreeding')
+```
+
+
+
+## 17 Make a plot of the observed chi-square statistics against the inbreeding coeficient. What do you observe? Can you give an equation that relates the two statistics?
+
+```{r}
+plot(fInbreeding, chiSqOut2, col='orchid', pch=2, ylab = "chi^2 statistic", main='Relation between chi^2 statistic and f Inbreeding coefficent')
+```
+We see that the $\chi^2$ statistic is maximized (and so the p-values are minimized) when the f inbreeding coefficent is at his extremes (-1 and 1), and is minimized when the f-statistic is at 0 (as we expected, since if $\hat f = 0$, we are in the equilibrium).
+
+the equation is just a parabola with vertex in $[0, 0]$
+$${\chi^2 stat} =\alpha  \hat f^2$$
+
+
+## 18 We reconsider the exact test for HWE, using different significant levels. Report the number and percentage of significant variants using an exac test for HWE with alpha = 0.10; 0.05; 0.01 and 0.001. State your conclusions.
+
+
+```{r}
+print(paste0("There are ", sum(exTest<0.10), " significant SNPs with a p-value<0.10"))
+print(paste0("The percentage of significant variants is ", sum(exTest<0.10)/length(exTest)*100, "%"))
+
+print(paste0("There are ", sum(exTest<0.05), " significant SNPs with a p-value<0.05"))
+print(paste0("The percentage of significant variants is ", sum(exTest<0.05)/length(exTest)*100, "%"))
+
+print(paste0("There are ", sum(exTest<0.01), " significant SNPs with a p-value<0.01"))
+print(paste0("The percentage of significant variants is ", sum(exTest<0.01)/length(exTest)*100, "%"))
+
+print(paste0("There are ", sum(exTest<0.001), " significant SNPs with a p-value<0.001"))
+print(paste0("The percentage of significant variants is ", sum(exTest<0.001)/length(exTest)*100, "%"))
+```
+
+Concerning the Exact test, we can say that for choices of $\alpha$ not so strict, we get less significant variants with respect to the expectation (the ones just by chance), so we could conclude that there is no evidence that we have more variants out of equilibrium than we would expect. But if we choose smaller $\alpha$, then things get less defined and we can't be so sure to reject the null-hypotesis of having more out-of-equilibrium variables than we would expect.
+
